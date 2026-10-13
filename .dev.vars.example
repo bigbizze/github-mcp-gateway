@@ -1,0 +1,21 @@
+# Secrets for this Worker.
+# The Cloudflare deploy button asks for each value listed here.
+# For local development, copy this file to .dev.vars, fill it in, and run `yarn dev`.
+
+# Comma-separated GitHub usernames that may connect, for example: octocat,hubot
+AUTHORIZED_GITHUB_LOGINS=
+
+# From your GitHub App's settings page. Generate the client secret there.
+GITHUB_APP_ID=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+
+# The GitHub App private key (.pem file), including the BEGIN and END lines.
+# In this file, wrap the whole multi-line key in double quotes, or put it on one
+# line with each line break written as \n. Without quotes, only the first line is read.
+# The deploy form accepts the key pasted exactly as GitHub provides it.
+GITHUB_APP_PRIVATE_KEY=
+
+# Random keys. Generate each one with: openssl rand -hex 32
+COOKIE_ENCRYPTION_KEY=
+REFERENCE_TOKEN_KEY=

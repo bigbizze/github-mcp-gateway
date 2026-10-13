@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "github-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV"
+    }
+  ],
+  "secrets": {
+    "required": [
+      "AUTHORIZED_GITHUB_LOGINS",
+      "GITHUB_APP_ID",
+      "GITHUB_CLIENT_ID",
+      "GITHUB_CLIENT_SECRET",
+      "GITHUB_APP_PRIVATE_KEY",
+      "COOKIE_ENCRYPTION_KEY",
+      "REFERENCE_TOKEN_KEY"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    }
+  }
+}

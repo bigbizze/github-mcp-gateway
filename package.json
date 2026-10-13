@@ -1,0 +1,73 @@
+{
+  "name": "github-mcp-gateway",
+  "version": "0.2.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "A read-only GitHub MCP server for Cloudflare Workers that reads only the repositories where its GitHub App is installed.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bigbizze/github-mcp-gateway.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "0.10.3",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@octokit/auth-app": "8.3.0",
+    "agents": "0.21.0",
+    "hono": "4.12.27",
+    "octokit": "5.0.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260823.1",
+    "@eslint/js": "9.39.1",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/node": "22.19.11",
+    "eslint": "9.39.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.48.0",
+    "vitest": "3.2.4",
+    "wrangler": "4.115.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "AUTHORIZED_GITHUB_LOGINS": {
+        "description": "Comma-separated GitHub usernames allowed to connect, for example `octocat,hubot`. Matching ignores case. Everyone else is refused after GitHub sign-in."
+      },
+      "GITHUB_APP_ID": {
+        "description": "The **App ID** number on your GitHub App's settings page. See the [setup guide](https://github.com/bigbizze/github-mcp-gateway#setup)."
+      },
+      "GITHUB_CLIENT_ID": {
+        "description": "The **Client ID** on your GitHub App's settings page."
+      },
+      "GITHUB_CLIENT_SECRET": {
+        "description": "A client secret. Generate one under **Client secrets** on your GitHub App's settings page."
+      },
+      "GITHUB_APP_PRIVATE_KEY": {
+        "description": "The GitHub App private key. Generate one under **Private keys** on the App's settings page, open the downloaded `.pem` file, and paste all of it, including the `BEGIN` and `END` lines. If the line breaks are lost when you paste, the Worker restores them."
+      },
+      "COOKIE_ENCRYPTION_KEY": {
+        "description": "A random value of at least 32 characters. Generate one with `openssl rand -hex 32`."
+      },
+      "REFERENCE_TOKEN_KEY": {
+        "description": "Exactly 64 hexadecimal characters. Generate with `openssl rand -hex 32`. Changing it later invalidates outstanding continuation tokens and artifact links."
+      },
+      "OAUTH_KV": {
+        "description": "Stores OAuth grants and tokens for connected MCP clients."
+      }
+    }
+  }
+}
