@@ -1,68 +1,42 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubReader, type OctokitLike } from "../src/github/reader";
-import { AesGcmTokenCodec, argumentHash } from "../src/security/reference-token";
+import { ARTIFACT_SCOPE } from "../src/github/operations/workflows";
+import type { ReferenceTokens } from "../src/security/reference-token";
+import { handleArtifactRequest } from "../src/routes";
+import { TEST_USER_ID, testReader } from "./support/reader";
 
-const key = "ab".repeat(32);
 const nowSeconds = 1_700_000_000;
+const link = { artifact_id: 7, repository_full_name: "owner/repo" };
 
-async function artifactToken(codec: AesGcmTokenCodec): Promise<string> {
-  const resource = {
-    artifact_id: 7,
-    name: "logs",
-    repository_full_name: "owner/repo",
-    size_in_bytes: 123,
-  };
-  return codec.seal({
-    args_hash: await argumentHash(resource),
-    cursor: {},
-    exp: nowSeconds + 300,
-    iat: nowSeconds,
-    operation: "download_workflow_artifact",
-    purpose: "artifact",
-    resource,
-    user_id: 42,
+function artifactReader(fetchMock: typeof fetch, now = nowSeconds) {
+  return testReader({
+    fetch: fetchMock,
+    now: () => now * 1000,
+    request: async (route) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 99 }, headers: {} };
+      throw new Error(`Unexpected route ${route}`);
+    },
   });
 }
 
-function reader(fetchMock: typeof fetch, codec: AesGcmTokenCodec): GitHubReader {
-  const octokit: OctokitLike = {
-    request: vi.fn(async (route) => {
-      if (route === "GET /repos/{owner}/{repo}/installation") {
-        return { data: { id: 99 }, headers: {} };
-      }
-      throw new Error(`Unexpected route ${route}`);
-    }),
-  };
-  return new GitHubReader(
-    { appId: "1", privateKey: "test-key" },
-    codec,
-    {
-      artifactBaseUrl: "https://worker.example",
-      authFactory: () => async (options) => ({
-        token: options.type === "app" ? "app-token" : "installation-token",
-      }),
-      fetch: fetchMock,
-      now: () => nowSeconds * 1000,
-      octokitFactory: () => octokit,
-    },
-  );
+function artifactToken(tokens: ReferenceTokens): Promise<string> {
+  return tokens.seal(ARTIFACT_SCOPE, TEST_USER_ID, 300, link);
+}
+
+function artifactRequest(token: string, method = "GET"): Request {
+  return new Request(`https://worker.example/artifacts/v1/${token}`, { method });
 }
 
 describe("signed artifact route", () => {
   it.each(["GET", "HEAD"])("accepts %s and returns one safe storage redirect", async (method) => {
-    const codec = new AesGcmTokenCodec(key, () => nowSeconds * 1000);
     const fetchMock = vi.fn<typeof fetch>(async () =>
       new Response(null, {
         headers: { Location: "https://storage.example/signed-zip?credential=bearer" },
         status: 302,
       }),
     );
-    const service = reader(fetchMock, codec);
-    const token = await artifactToken(codec);
-    const response = await service.handleArtifactRequest(
-      new Request(`https://worker.example/artifacts/v1/${token}`, { method }),
-      token,
-    );
+    const { reader, tokens } = artifactReader(fetchMock);
+    const token = await artifactToken(tokens);
+    const response = await handleArtifactRequest(artifactRequest(token, method), reader, token);
 
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toBe("https://storage.example/signed-zip?credential=bearer");
@@ -72,65 +46,48 @@ describe("signed artifact route", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.github.com/repos/owner/repo/actions/artifacts/7/zip");
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-      headers: { Authorization: "Bearer installation-token", "X-GitHub-Api-Version": "2026-03-10" },
+      headers: { Authorization: "Bearer installation-99", "X-GitHub-Api-Version": "2026-03-10" },
       redirect: "manual",
     });
   });
 
   it("rejects other methods before a GitHub request", async () => {
-    const codec = new AesGcmTokenCodec(key, () => nowSeconds * 1000);
     const fetchMock = vi.fn<typeof fetch>();
-    const service = reader(fetchMock, codec);
-    const token = await artifactToken(codec);
-    const response = await service.handleArtifactRequest(
-      new Request(`https://worker.example/artifacts/v1/${token}`, { method: "POST" }),
-      token,
-    );
+    const { reader, tokens } = artifactReader(fetchMock);
+    const token = await artifactToken(tokens);
+    const response = await handleArtifactRequest(artifactRequest(token, "POST"), reader, token);
 
     expect(response.status).toBe(405);
     expect(response.headers.get("Allow")).toBe("GET, HEAD");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects expired, changed, and unsafe-redirect tokens", async () => {
-    const codec = new AesGcmTokenCodec(key, () => nowSeconds * 1000);
-    const token = await artifactToken(codec);
-    const expiredCodec = new AesGcmTokenCodec(key, () => (nowSeconds + 301) * 1000);
-    const safeFetch = vi.fn<typeof fetch>();
-    const expired = await reader(safeFetch, expiredCodec).handleArtifactRequest(
-      new Request(`https://worker.example/artifacts/v1/${token}`),
+  it("rejects expired and unsafe-redirect tokens", async () => {
+    const issued = artifactReader(vi.fn<typeof fetch>());
+    const token = await artifactToken(issued.tokens);
+
+    const expiredFetch = vi.fn<typeof fetch>();
+    const expired = await handleArtifactRequest(
+      artifactRequest(token),
+      artifactReader(expiredFetch, nowSeconds + 301).reader,
       token,
     );
     expect(expired.status).toBe(404);
-    expect(safeFetch).not.toHaveBeenCalled();
+    expect(expiredFetch).not.toHaveBeenCalled();
 
     const unsafeFetch = vi.fn<typeof fetch>(async () =>
       new Response(null, { headers: { Location: "http://storage.example/file" }, status: 302 }),
     );
-    const unsafe = await reader(unsafeFetch, codec).handleArtifactRequest(
-      new Request(`https://worker.example/artifacts/v1/${token}`),
-      token,
-    );
+    const unsafe = await handleArtifactRequest(artifactRequest(token), artifactReader(unsafeFetch).reader, token);
     expect(unsafe.status).toBe(404);
   });
 
-  it("rejects a valid token whose resource hash does not match", async () => {
-    const codec = new AesGcmTokenCodec(key, () => nowSeconds * 1000);
-    const token = await codec.seal({
-      args_hash: "wrong-resource-hash",
-      cursor: {},
-      exp: nowSeconds + 300,
-      iat: nowSeconds,
-      operation: "download_workflow_artifact",
-      purpose: "artifact",
-      resource: { artifact_id: 7, repository_full_name: "owner/repo" },
-      user_id: 42,
-    });
+  it("rejects a valid token that was sealed for another purpose", async () => {
     const fetchMock = vi.fn<typeof fetch>();
-    const response = await reader(fetchMock, codec).handleArtifactRequest(
-      new Request(`https://worker.example/artifacts/v1/${token}`),
-      token,
-    );
+    const { reader, tokens } = artifactReader(fetchMock);
+    const token = await tokens.seal({ operation: "fetch_file", purpose: "file" }, TEST_USER_ID, 300, link);
+    const response = await handleArtifactRequest(artifactRequest(token), reader, token);
+
     expect(response.status).toBe(404);
     expect(fetchMock).not.toHaveBeenCalled();
   });

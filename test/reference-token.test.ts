@@ -1,86 +1,55 @@
 import { describe, expect, it } from "vitest";
-import { ConfigurationError } from "../src/config";
-import {
-  AesGcmTokenCodec,
-  argumentHash,
-  bodyHash,
-  type ReferenceTokenPayload,
-} from "../src/security/reference-token";
+import { z } from "zod";
+import { ReferenceTokens, type TokenScope } from "../src/security/reference-token";
 
 const key = "01".repeat(32);
+const scope: TokenScope = { operation: "fetch_file", purpose: "file" };
+const bodySchema = z.strictObject({ path: z.string(), repository_full_name: z.string() });
+const body = { path: "secret.txt", repository_full_name: "owner/repo" };
 
-function payload(now: number): Omit<ReferenceTokenPayload, "v"> {
-  return {
-    args_hash: "argument-hash",
-    cursor: { byte_offset: 100 },
-    exp: now + 60,
-    iat: now,
-    operation: "fetch_file",
-    purpose: "file",
-    resource: { path: "secret.txt", repository_full_name: "owner/repo" },
-    user_id: 42,
-  };
+function tokens(start = 1_700_000_000) {
+  let now = start;
+  return { advance: (seconds: number) => { now += seconds; }, tokens: new ReferenceTokens(key, () => now * 1000) };
 }
 
 describe("AES-GCM reference tokens", () => {
   it("requires exactly 32 hexadecimal key bytes", () => {
-    expect(() => new AesGcmTokenCodec("short")).toThrow(ConfigurationError);
-    expect(() => new AesGcmTokenCodec("z".repeat(64))).toThrow("64 hexadecimal");
-    expect(() => new AesGcmTokenCodec(key)).not.toThrow();
+    expect(() => new ReferenceTokens("short")).toThrow("64 hexadecimal");
+    expect(() => new ReferenceTokens("z".repeat(64))).toThrow("64 hexadecimal");
   });
 
-  it("encrypts and authenticates the complete payload", async () => {
-    const now = 1_700_000_000;
-    const codec = new AesGcmTokenCodec(key, () => now * 1000);
-    const token = await codec.seal(payload(now));
+  it("encrypts the body and returns it after schema validation", async () => {
+    const { tokens: codec } = tokens();
+    const token = await codec.seal(scope, 42, 60, body);
 
-    expect(token).toMatch(/^v2\.[A-Za-z0-9_-]+$/u);
+    expect(token).toMatch(/^v3\.[A-Za-z0-9_-]+$/u);
     expect(token).not.toContain("secret.txt");
-    await expect(codec.open(token, { operation: "fetch_file", purpose: "file", user_id: 42 })).resolves.toMatchObject({
-      operation: "fetch_file",
-      purpose: "file",
-      user_id: 42,
-      v: 2,
-    });
+    await expect(codec.open(token, scope, 42, bodySchema)).resolves.toEqual({ body, userId: 42 });
+    await expect(codec.open(token, scope, "any", bodySchema)).resolves.toEqual({ body, userId: 42 });
+  });
 
+  it("rejects a changed token and an older token version", async () => {
+    const { tokens: codec } = tokens();
+    const token = await codec.seal(scope, 42, 60, body);
     const changed = `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
-    await expect(codec.open(changed, { operation: "fetch_file", purpose: "file" })).rejects.toThrow("changed");
+
+    await expect(codec.open(changed, scope, 42, bodySchema)).rejects.toMatchObject({ code: "invalid_token" });
+    await expect(codec.open(token.replace(/^v3/u, "v2"), scope, 42, bodySchema)).rejects.toMatchObject({
+      code: "invalid_token",
+    });
   });
 
-  it("rejects version 1 tokens", async () => {
-    const now = 1_700_000_000;
-    const codec = new AesGcmTokenCodec(key, () => now * 1000);
-    const token = await codec.seal(payload(now));
+  it("rejects purpose confusion, operation confusion, user mismatch, a wrong body, and expiry", async () => {
+    const { advance, tokens: codec } = tokens();
+    const token = await codec.seal(scope, 42, 60, body);
 
-    await expect(codec.open(token.replace(/^v2/u, "v1"), {
-      operation: "fetch_file",
-      purpose: "file",
-    })).rejects.toThrow("invalid");
-  });
-
-  it("rejects expiry, purpose confusion, operation confusion, and user mismatch", async () => {
-    let now = 1_700_000_000;
-    const codec = new AesGcmTokenCodec(key, () => now * 1000);
-    const token = await codec.seal(payload(now));
-
-    await expect(codec.open(token, { operation: "fetch_file", purpose: "text" })).rejects.toThrow("changed");
-    await expect(codec.open(token, { operation: "read_text", purpose: "file" })).rejects.toThrow("changed");
-    await expect(codec.open(token, { operation: "fetch_file", purpose: "file", user_id: 7 })).rejects.toThrow("different GitHub user");
-    now += 61;
-    await expect(codec.open(token, { operation: "fetch_file", purpose: "file" })).rejects.toThrow("expired");
-  });
-
-  it("hashes normalized arguments without property-order changes", async () => {
-    await expect(argumentHash({ a: 1, nested: { x: 2, y: 3 } })).resolves.toBe(
-      await argumentHash({ nested: { y: 3, x: 2 }, a: 1 }),
-    );
-    await expect(argumentHash({ a: 2 })).resolves.not.toBe(await argumentHash({ a: 1 }));
-  });
-
-  it("hashes raw UTF-8 body bytes", async () => {
-    await expect(bodyHash("hello")).resolves.toBe(
-      "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-    );
-    await expect(bodyHash("hello")).resolves.not.toBe(await argumentHash("hello"));
+    await expect(codec.open(token, { ...scope, purpose: "text" }, 42, bodySchema)).rejects.toThrow("changed");
+    await expect(codec.open(token, { ...scope, operation: "read_text" }, 42, bodySchema)).rejects.toThrow("changed");
+    await expect(codec.open(token, scope, 7, bodySchema)).rejects.toThrow("different GitHub user");
+    await expect(codec.open(token, scope, 42, z.strictObject({ path: z.number() }))).rejects.toMatchObject({
+      code: "invalid_token",
+    });
+    advance(61);
+    await expect(codec.open(token, scope, 42, bodySchema)).rejects.toThrow("expired");
   });
 });

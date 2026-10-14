@@ -2,13 +2,12 @@ import { createPrivateKey, generateKeyPairSync, verify, webcrypto } from "node:c
 import { describe, expect, it } from "vitest";
 import {
   ConfigurationError,
-  githubAppConfig,
   isAuthorizedLogin,
+  loadConfig,
   normalizePrivateKey,
   parseAuthorizedLogins,
-  validateOAuthConfiguration,
+  type WorkerEnv,
 } from "../src/config";
-import type { WorkerEnv } from "../src/types";
 
 function oauthEnv(overrides: Partial<WorkerEnv> = {}): WorkerEnv {
   return {
@@ -30,7 +29,9 @@ describe("authorized GitHub login configuration", () => {
     expect(parseAuthorizedLogins(" First-User,second-user, FIRST-USER ")).toEqual(
       new Set(["first-user", "second-user"]),
     );
-    expect(isAuthorizedLogin("First-User,second-user", "FIRST-USER")).toBe(true);
+    const config = loadConfig(oauthEnv({ AUTHORIZED_GITHUB_LOGINS: "First-User,second-user" }));
+    expect(isAuthorizedLogin(config, "FIRST-USER")).toBe(true);
+    expect(isAuthorizedLogin(config, "third-user")).toBe(false);
   });
 
   it.each([undefined, "", " , "])("fails closed for %j", (value) => {
@@ -49,20 +50,16 @@ describe("operator configuration", () => {
       "GITHUB_CLIENT_SECRET",
       "REFERENCE_TOKEN_KEY",
     ] as const) {
-      expect(() => validateOAuthConfiguration(oauthEnv({ [key]: "" }))).toThrow(
-        ConfigurationError,
-      );
+      expect(() => loadConfig(oauthEnv({ [key]: "" }))).toThrow(ConfigurationError);
     }
   });
 
   it("rejects a short cookie-signing secret", () => {
-    expect(() => validateOAuthConfiguration(oauthEnv({ COOKIE_ENCRYPTION_KEY: "too-short" }))).toThrow(
-      "at least 32 characters",
-    );
+    expect(() => loadConfig(oauthEnv({ COOKIE_ENCRYPTION_KEY: "too-short" }))).toThrow("at least 32 characters");
   });
 
   it("normalizes escaped newlines in the GitHub App private key", () => {
-    expect(githubAppConfig(oauthEnv())).toEqual({
+    expect(loadConfig(oauthEnv()).github).toEqual({
       appId: "123",
       privateKey: "line-1\nline-2",
     });
@@ -94,7 +91,7 @@ describe("operator configuration", () => {
   it("leaves a private key that already has line breaks unchanged", () => {
     const pem = "-----BEGIN PRIVATE KEY-----\nAAAA\nBBBB\n-----END PRIVATE KEY-----\n";
     expect(normalizePrivateKey(pem)).toBe(pem);
-    expect(githubAppConfig(oauthEnv({ GITHUB_APP_PRIVATE_KEY: pem })).privateKey).toBe(pem);
+    expect(loadConfig(oauthEnv({ GITHUB_APP_PRIVATE_KEY: pem })).github.privateKey).toBe(pem);
   });
 
   it("converts GitHub's PKCS#1 private key to PKCS#8 that WebCrypto can sign with", async () => {
@@ -111,7 +108,7 @@ describe("operator configuration", () => {
       pkcs1.replace(/\n/g, ""),
       pkcs1.replace(/\n/g, " "),
     ]) {
-      expect(githubAppConfig(oauthEnv({ GITHUB_APP_PRIVATE_KEY: pasted })).privateKey).toBe(pkcs8);
+      expect(loadConfig(oauthEnv({ GITHUB_APP_PRIVATE_KEY: pasted })).github.privateKey).toBe(pkcs8);
     }
 
     const der = Buffer.from(pkcs8.replace(/-----[A-Z ]+-----|\s/g, ""), "base64");
@@ -125,15 +122,11 @@ describe("operator configuration", () => {
     const data = new TextEncoder().encode("github-app-jwt");
     const signature = await webcrypto.subtle.sign("RSASSA-PKCS1-v1_5", key, data);
     expect(verify("sha256", data, publicKey, Buffer.from(signature))).toBe(true);
-    expect(githubAppConfig(oauthEnv({ GITHUB_APP_PRIVATE_KEY: pkcs8 })).privateKey).toBe(pkcs8);
+    expect(loadConfig(oauthEnv({ GITHUB_APP_PRIVATE_KEY: pkcs8 })).github.privateKey).toBe(pkcs8);
   });
 
   it("requires a 64-character hexadecimal reference-token key", () => {
-    expect(() => validateOAuthConfiguration(oauthEnv({ REFERENCE_TOKEN_KEY: "too-short" }))).toThrow(
-      "64 hexadecimal",
-    );
-    expect(() => validateOAuthConfiguration(oauthEnv({ REFERENCE_TOKEN_KEY: "z".repeat(64) }))).toThrow(
-      "64 hexadecimal",
-    );
+    expect(() => loadConfig(oauthEnv({ REFERENCE_TOKEN_KEY: "too-short" }))).toThrow("64 hexadecimal");
+    expect(() => loadConfig(oauthEnv({ REFERENCE_TOKEN_KEY: "z".repeat(64) }))).toThrow("64 hexadecimal");
   });
 });

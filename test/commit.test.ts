@@ -1,11 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import { GitHubReader, type OctokitLike } from "../src/github/reader";
-import { AesGcmTokenCodec } from "../src/security/reference-token";
+import { describe, expect, it } from "vitest";
+import { runData, testReader } from "./support/reader";
 
 describe("commit metadata", () => {
   it("returns the commit tree and parent SHAs", async () => {
-    const octokit: OctokitLike = {
-      request: vi.fn(async (route) => {
+    const { reader } = testReader({
+      request: async (route) => {
         if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 1 }, headers: {} };
         if (route === "GET /repos/{owner}/{repo}/commits/{ref}") {
           return {
@@ -25,22 +24,13 @@ describe("commit metadata", () => {
           };
         }
         throw new Error(`Unexpected route ${route}`);
-      }),
-    };
-    const reader = new GitHubReader(
-      { appId: "1", privateKey: "key" },
-      new AesGcmTokenCodec("78".repeat(32)),
-      {
-        artifactBaseUrl: "https://worker.example",
-        authFactory: () => async (options) => ({ token: options.type === "app" ? "app" : "installation" }),
-        octokitFactory: () => octokit,
       },
-    );
+    });
 
-    const result = (await reader.execute("fetch_commit", {
+    const result = await runData(reader, "fetch_commit", {
       commit_sha: "commit-sha",
       repository_full_name: "owner/repo",
-    }, 42)).data;
+    });
 
     expect(result).toMatchObject({
       commit_sha: "commit-sha",
@@ -48,6 +38,6 @@ describe("commit metadata", () => {
       parents: ["parent-one", "parent-two"],
       tree_sha: "tree-sha",
     });
-    expect((result as { message: Record<string, unknown> }).message.reference_token).toBeUndefined();
+    expect((result.message as Record<string, unknown>).reference_token).toBeUndefined();
   });
 });

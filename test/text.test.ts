@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { GatewayError } from "../src/github/gateway-error";
+import { GatewayError } from "../src/errors";
 import {
   decodeText,
   scanFileChunk,
   sliceKnownText,
   splitLinesPreservingEndings,
   validateUtf8Chunk,
-} from "../src/github/text";
+} from "../src/github/text-window";
 
 describe("bounded text windows", () => {
   it("uses the required empty-file and final-newline line semantics", () => {

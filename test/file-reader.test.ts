@@ -1,17 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubReader, type OctokitLike } from "../src/github/reader";
-import { executeGatewayRequest } from "../src/github/gateway";
 import type { RangeRequest } from "../src/github/range-http";
-import { AesGcmTokenCodec } from "../src/security/reference-token";
-
-const key = "cd".repeat(32);
+import { handleToolCall } from "../src/mcp/server";
+import { run, runData, TEST_USER_ID, testReader } from "./support/reader";
 
 function fileReader(
   bytes: Uint8Array,
   options: { contentRange?: string; encoding?: string; inlineContent?: string | null; status?: number } = {},
 ) {
-  const octokit: OctokitLike = {
-    request: vi.fn(async (route) => {
+  const fetchMock = vi.fn<typeof fetch>(async () => {
+    throw new Error("The file range used fetch instead of the TLS transport");
+  });
+  const rangeMock = vi.fn<RangeRequest>(async (_url, start, requestedEnd) => {
+    const end = Math.min(requestedEnd, bytes.byteLength - 1);
+    const body = bytes.slice(start, end + 1);
+    return {
+      bytes: body,
+      headers: new Headers({
+        "Content-Range": options.contentRange ?? `bytes ${start}-${end}/${bytes.byteLength}`,
+      }),
+      status: options.status ?? 206,
+    };
+  });
+  const { reader, request } = testReader({
+    fetch: fetchMock,
+    rangeRequest: rangeMock,
+    request: async (route) => {
       if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 1 }, headers: {} };
       if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "main" }, headers: {} };
       if (route === "GET /repos/{owner}/{repo}/commits/{ref}") return { data: { sha: "commit-sha" }, headers: {} };
@@ -31,48 +44,19 @@ function fileReader(
         };
       }
       throw new Error(`Unexpected route ${route}`);
-    }),
-  };
-  const fetchMock = vi.fn<typeof fetch>(async () => {
-    throw new Error("The file range used fetch instead of the TLS transport");
-  });
-  const rangeMock = vi.fn<RangeRequest>(async (_url, start, requestedEnd) => {
-    const end = Math.min(requestedEnd, bytes.byteLength - 1);
-    const body = bytes.slice(start, end + 1);
-    return {
-      bytes: body,
-      headers: new Headers({
-        "Content-Range": options.contentRange ?? `bytes ${start}-${end}/${bytes.byteLength}`,
-      }),
-      status: options.status ?? 206,
-    };
-  });
-  const reader = new GitHubReader(
-    { appId: "1", privateKey: "key" },
-    new AesGcmTokenCodec(key),
-    {
-      artifactBaseUrl: "https://worker.example",
-      authFactory: () => async (authOptions) => ({ token: authOptions.type === "app" ? "app" : "installation" }),
-      fetch: fetchMock,
-      octokitFactory: () => octokit,
-      rangeRequest: rangeMock,
     },
-  );
-  return { fetchMock, octokit, rangeMock, reader };
-}
-
-function data(result: Awaited<ReturnType<GitHubReader["execute"]>>): Record<string, unknown> {
-  return result.data as Record<string, unknown>;
+  });
+  return { fetchMock, rangeMock, reader, request };
 }
 
 describe("fetch URL arguments", () => {
   it("rejects URL query values outside the operation's limits before any GitHub request", async () => {
-    const { octokit, reader } = fileReader(new TextEncoder().encode("one\n"));
+    const { reader, request } = fileReader(new TextEncoder().encode("one\n"));
 
     await expect(
-      reader.execute("fetch", { url: "https://github.com/owner/repo/issues?per_page=100" }, 42),
+      run(reader, "fetch", { url: "https://github.com/owner/repo/issues?per_page=100" }),
     ).rejects.toMatchObject({ code: "invalid_arguments" });
-    expect(octokit.request).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("reads a file through a validated fetch URL", async () => {
@@ -81,9 +65,7 @@ describe("fetch URL arguments", () => {
       encoding: "base64",
       inlineContent: btoa(String.fromCharCode(...source)),
     });
-    const result = data(
-      await reader.execute("fetch", { url: "https://github.com/owner/repo/blob/main/file.txt" }, 42),
-    );
+    const result = await runData(reader, "fetch", { url: "https://github.com/owner/repo/blob/main/file.txt" });
 
     expect(result).toMatchObject({ content: "one\ntwo\n", state: "complete", total_lines: 2 });
   });
@@ -96,11 +78,11 @@ describe("pinned byte-range file reader", () => {
       encoding: "base64",
       inlineContent: btoa(String.fromCharCode(...source)),
     });
-    const result = data(await reader.execute("fetch_file", {
+    const result = await runData(reader, "fetch_file", {
       path: "file.txt",
       repository_full_name: "owner/repo",
       start_line: 2,
-    }, 42));
+    });
 
     expect(result).toMatchObject({
       content: "two\nthree\n",
@@ -118,10 +100,10 @@ describe("pinned byte-range file reader", () => {
       encoding: "base64",
       inlineContent: "eAo=",
     });
-    const result = data(await reader.execute("fetch_file", {
+    const result = await runData(reader, "fetch_file", {
       path: "file.txt",
       repository_full_name: "owner/repo",
-    }, 42));
+    });
 
     expect(result).toMatchObject({ state: "partial" });
     expect(rangeMock).toHaveBeenCalledOnce();
@@ -130,12 +112,12 @@ describe("pinned byte-range file reader", () => {
   it("returns exact lines, preserves CRLF, and observes total lines only at EOF", async () => {
     const source = new TextEncoder().encode("one\r\ntwo\r\nthree");
     const { fetchMock, rangeMock, reader } = fileReader(source);
-    const result = data(await reader.execute("fetch_file", {
+    const result = await runData(reader, "fetch_file", {
       end_line: 3,
       path: "file.txt",
       repository_full_name: "owner/repo",
       start_line: 2,
-    }, 42));
+    });
 
     expect(result).toMatchObject({
       binary: false,
@@ -156,21 +138,21 @@ describe("pinned byte-range file reader", () => {
 
   it("returns eof for a start line after the last final-newline line", async () => {
     const { reader } = fileReader(new TextEncoder().encode("one\n"));
-    const result = data(await reader.execute("fetch_file", {
+    const result = await runData(reader, "fetch_file", {
       path: "file.txt",
       repository_full_name: "owner/repo",
       start_line: 2,
-    }, 42));
+    });
     expect(result).toMatchObject({ state: "eof", total_lines: 1 });
     expect(result.content).toBeUndefined();
   });
 
   it("returns metadata only for initial binary data", async () => {
     const { reader } = fileReader(new Uint8Array([65, 0, 66, 10]));
-    const result = data(await reader.execute("fetch_file", {
+    const result = await runData(reader, "fetch_file", {
       path: "file.txt",
       repository_full_name: "owner/repo",
-    }, 42));
+    });
     expect(result).toMatchObject({ binary: true, state: "complete" });
     expect(result.content).toBeUndefined();
   });
@@ -178,30 +160,30 @@ describe("pinned byte-range file reader", () => {
   it("returns seeking and an exact opaque continuation without hidden loss", async () => {
     const source = new TextEncoder().encode(`${"x\n".repeat(40_000)}target\n`);
     const { reader } = fileReader(source);
-    const first = data(await reader.execute("fetch_file", {
+    const first = await runData(reader, "fetch_file", {
       path: "file.txt",
       repository_full_name: "owner/repo",
       start_line: 40_001,
-    }, 42));
+    });
     expect(first).toMatchObject({ state: "seeking" });
     const next = first.next_request as { arguments: { continuation_token: string }; operation: string };
     expect(next.operation).toBe("fetch_file");
 
-    const second = data(await reader.execute("fetch_file", next.arguments, 42));
+    const second = await runData(reader, "fetch_file", next.arguments);
     expect(second).toMatchObject({ content: "target\n", start_line: 40_001, state: "complete", total_lines: 40_001 });
   });
 
   it("preserves a UTF-8 character split between seeking ranges", async () => {
     const source = new TextEncoder().encode(`${"x".repeat(65_534)}🙂\ntarget\n`);
     const { reader } = fileReader(source);
-    const first = data(await reader.execute("fetch_file", {
+    const first = await runData(reader, "fetch_file", {
       path: "file.txt",
       repository_full_name: "owner/repo",
       start_line: 2,
-    }, 42));
+    });
     expect(first).toMatchObject({ state: "seeking" });
     const next = first.next_request as { arguments: { continuation_token: string } };
-    const second = data(await reader.execute("fetch_file", next.arguments, 42));
+    const second = await runData(reader, "fetch_file", next.arguments);
     expect(second).toMatchObject({ content: "target\n", start_line: 2, state: "complete", total_lines: 2 });
   });
 
@@ -209,10 +191,10 @@ describe("pinned byte-range file reader", () => {
     const { reader } = fileReader(new TextEncoder().encode("one\n"), {
       contentRange: "bytes 1-3/4",
     });
-    await expect(reader.execute("fetch_file", {
+    await expect(run(reader, "fetch_file", {
       path: "file.txt",
       repository_full_name: "owner/repo",
-    }, 42)).rejects.toMatchObject({
+    })).rejects.toMatchObject({
       code: "range_not_supported",
       details: {
         content_encoding: null,
@@ -227,7 +209,7 @@ describe("pinned byte-range file reader", () => {
     const source = new TextEncoder().encode(`${"1234567890\n".repeat(2_000)}`);
     const { reader } = fileReader(source);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const result = await executeGatewayRequest(reader, 42, {
+    const result = await handleToolCall(reader, TEST_USER_ID, {
       action: "execute",
       arguments: {
         end_line: 2_000,

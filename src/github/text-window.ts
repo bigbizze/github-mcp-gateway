@@ -1,4 +1,4 @@
-import { GatewayError } from "./gateway-error";
+import { GatewayError } from "../errors";
 import { byteLength, MAX_INLINE_TEXT_BYTES } from "./result";
 
 export interface KnownTextWindow {
@@ -152,8 +152,12 @@ export interface ScannedFileWindow {
   consumed_bytes: number;
   end_line?: number;
   next_line: number;
+  /** True when the output size limit, not the chunk end or the requested end, stopped the window. */
+  size_limited?: boolean;
   start_line?: number;
   state: "complete" | "partial" | "seeking";
+  /** The number of lines in the file. Known only when the chunk reached the end of the file. */
+  total_lines?: number;
 }
 
 /**
@@ -188,15 +192,18 @@ export function scanFileChunk(
   }
   const lines = splitLinesPreservingEndings(decoded);
   const scanEndLine = cursorLine + lines.length - 1;
+  const total = eof ? { total_lines: scanEndLine } : {};
   if (scanEndLine < requestedStartLine) {
     return {
       binary: false,
       consumed_bytes: completeLength,
       next_line: scanEndLine + 1,
       state: eof ? "complete" : "seeking",
+      ...total,
     };
   }
-  const localStart = Math.max(0, requestedStartLine - cursorLine);
+  const windowStart = Math.max(requestedStartLine, cursorLine);
+  const localStart = windowStart - cursorLine;
   const maximumEnd = requestedEndLine === undefined ? scanEndLine : Math.min(requestedEndLine, scanEndLine);
   const localEndExclusive = maximumEnd - cursorLine + 1;
   const selected = lines.slice(localStart, localEndExclusive);
@@ -209,13 +216,13 @@ export function scanFileChunk(
     fitCount += 1;
   }
   if (fitCount === 0 && selected.length > 0) {
-    throw new GatewayError("line_too_large", `Line ${requestedStartLine} cannot fit in one result`);
+    throw new GatewayError("line_too_large", `Line ${windowStart} cannot fit in one result`);
   }
   const returned = selected.slice(0, fitCount);
-  const endLine = requestedStartLine + returned.length - 1;
+  const endLine = windowStart + returned.length - 1;
   const consumedLines = localStart + returned.length;
   const consumedText = lines.slice(0, consumedLines).join("");
-  const consumedBytes = new TextEncoder().encode(consumedText).byteLength;
+  const consumedBytes = byteLength(consumedText);
   const requestComplete = requestedEndLine !== undefined && endLine >= requestedEndLine;
   const sourceComplete = eof && consumedLines >= lines.length;
   return {
@@ -224,7 +231,9 @@ export function scanFileChunk(
     consumed_bytes: consumedBytes,
     end_line: endLine,
     next_line: endLine + 1,
-    start_line: requestedStartLine,
+    size_limited: fitCount < selected.length,
+    start_line: windowStart,
     state: requestComplete || sourceComplete ? "complete" : "partial",
+    ...total,
   };
 }

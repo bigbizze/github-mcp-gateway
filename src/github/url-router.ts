@@ -1,4 +1,4 @@
-import { GatewayError } from "./gateway-error";
+import { GatewayError } from "../errors";
 import type { OperationName } from "./catalog";
 
 const ALLOWED_HOSTS = new Set(["api.github.com", "github.com", "raw.githubusercontent.com"]);

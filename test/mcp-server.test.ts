@@ -1,12 +1,15 @@
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitHubBackend } from "../src/github/gateway";
-import { GatewayError } from "../src/github/gateway-error";
-import { createGitHubMcpServer } from "../src/mcp/server";
+import { GatewayError } from "../src/errors";
+import { createGitHubMcpServer, type GitHubBackend } from "../src/mcp/server";
 
 function fakeBackend(): GitHubBackend {
-  return { execute: vi.fn(async (operation, argumentsValue, userId) => ({ data: { arguments: argumentsValue, operation, user_id: userId } })) };
+  return {
+    execute: vi.fn<GitHubBackend["execute"]>(async (call, userId) => ({
+      data: { arguments: call.arguments, operation: call.operation, user_id: userId },
+    })),
+  };
 }
 
 const closeCallbacks: Array<() => Promise<void>> = [];
@@ -107,8 +110,10 @@ describe("GitHub MCP gateway", () => {
 
     expect(result.isError).not.toBe(true);
     expect(backend.execute).toHaveBeenCalledWith(
-      "list_directory",
-      { limit: 20, offset: 0, path: "", repository_full_name: "owner/repo" },
+      {
+        arguments: { limit: 20, offset: 0, path: "", repository_full_name: "owner/repo" },
+        operation: "list_directory",
+      },
       42,
     );
 
@@ -123,6 +128,17 @@ describe("GitHub MCP gateway", () => {
     const error = JSON.parse(textResult(invalid)) as { error: { code: string }; ok: boolean };
     expect(invalid.isError).toBe(true);
     expect(error).toMatchObject({ error: { code: "invalid_arguments" }, ok: false });
+
+    const unknownField = await client.callTool({
+      arguments: {
+        action: "execute",
+        arguments: { repository_full_name: "owner/repo", unexpected: true },
+        operation: "get_repository",
+      },
+      name: "github",
+    });
+    expect(unknownField.isError).toBe(true);
+    expect(backend.execute).toHaveBeenCalledOnce();
   });
 
   it("executes a known operation without a prior describe request", async () => {

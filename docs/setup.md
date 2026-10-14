@@ -50,7 +50,7 @@ yarn wrangler secret put REFERENCE_TOKEN_KEY
 | `GITHUB_CLIENT_ID` | The Client ID from the app's settings page. |
 | `GITHUB_CLIENT_SECRET` | A client secret generated on the app's settings page. |
 | `GITHUB_APP_PRIVATE_KEY` | The PEM private key, including the `BEGIN` and `END` lines. Line breaks can be kept, written as `\n`, or removed; the Worker restores them. GitHub's PKCS#1 key (`BEGIN RSA PRIVATE KEY`) is converted to PKCS#8 when the Worker reads it, so no `openssl` step is needed. |
-| `COOKIE_ENCRYPTION_KEY` | At least 32 characters, for example from `openssl rand -hex 32`. It signs the cookie that ties the GitHub sign-in redirect to the browser that started it. Changing it only interrupts sign-ins in progress. |
+| `COOKIE_ENCRYPTION_KEY` | At least 32 characters, for example from `openssl rand -hex 32`. It signs the cookies for the approval page, the remembered client approvals, and the GitHub sign-in redirect. Changing it interrupts sign-ins in progress and makes every user approve their clients again. |
 | `REFERENCE_TOKEN_KEY` | Exactly 64 hexadecimal characters, from `openssl rand -hex 32`. It is the AES-256-GCM key for continuation tokens and artifact links. Changing it invalidates all outstanding tokens and links. |
 
 Delete local copies of the private key once the secret is set.
@@ -107,6 +107,10 @@ yarn build
 **GitHub shows an error page instead of asking you to authorize the app.** `GITHUB_CLIENT_ID` is probably wrong. Copy it again from the app's settings page.
 
 **"Unable to begin authorization"** (HTTP 400). Either a secret is missing or fails the rules in the table above (the Worker checks all seven before it starts a sign-in), or the MCP client's registration is unknown to this Worker, for example after the `OAUTH_KV` namespace was replaced. In the second case, remove the server from the client and add it again.
+
+**"The approval form expired. Start the connection again"** (HTTP 400). The approval page was open for more than ten minutes, or the browser blocked its cookie. Start the connection from the client again and approve within ten minutes.
+
+**The approval page appears again.** The Worker remembers an approval for 30 days, for one client and one redirect address, in one browser. A new browser, a client that registered again, or a changed `COOKIE_ENCRYPTION_KEY` needs a new approval.
 
 **"GitHub did not provide an authorization code"** (HTTP 400). The sign-in was cancelled on GitHub. Connect again.
 

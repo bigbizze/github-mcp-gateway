@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubReader, type OctokitLike } from "../src/github/reader";
-import { AesGcmTokenCodec } from "../src/security/reference-token";
+import type { OctokitLike } from "../src/github/session";
+import { runData, testReader } from "./support/reader";
 
 describe("lazy repository installation scan", () => {
   it("continues beyond 100 installations without exceeding one-call subrequest limits", async () => {
@@ -33,29 +33,21 @@ describe("lazy repository installation scan", () => {
         headers: {},
       })),
     };
-    const reader = new GitHubReader(
-      { appId: "1", privateKey: "key" },
-      new AesGcmTokenCodec("12".repeat(32)),
-      {
-        artifactBaseUrl: "https://worker.example",
-        authFactory: () => async (options) => ({
-          token: options.type === "app" ? "app" : `installation-${String(options.installationId)}`,
-        }),
-        octokitFactory: (token) => {
-          if (token === "app") return appClient;
-          if (token === "installation-101") return finalInstallation;
-          return emptyInstallation;
-        },
+    const { reader } = testReader({
+      octokit: (token) => {
+        if (token === "app") return appClient;
+        if (token === "installation-101") return finalInstallation;
+        return emptyInstallation;
       },
-    );
+    });
 
-    let argumentsValue: Record<string, unknown> = { page_size: 1, query: "target" };
+    let argumentsValue: unknown = { page_size: 1, query: "target" };
     let found: Array<Record<string, unknown>> = [];
     for (let request = 0; request < 20 && found.length === 0; request += 1) {
-      const result = (await reader.execute("search_repositories", argumentsValue, 42)).data as {
-        next_request?: { arguments: Record<string, unknown> };
+      const result = await runData<{
+        next_request?: { arguments: unknown };
         repositories: Array<Record<string, unknown>>;
-      };
+      }>(reader, "search_repositories", argumentsValue);
       found = result.repositories;
       if (found.length === 0) {
         expect(result.next_request).toBeDefined();

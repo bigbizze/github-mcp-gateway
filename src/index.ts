@@ -1,32 +1,40 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
-import { WorkerEntrypoint } from "cloudflare:workers";
 import { createMcpHandler } from "agents/mcp/server";
-import { GitHubOAuthHandler } from "./auth/github-oauth";
-import { githubAppConfig, isAuthorizedLogin, referenceTokenKey } from "./config";
-import { requestRangeOverTls } from "./github/cloudflare-range";
+import { connect } from "cloudflare:sockets";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import type { AuthProps } from "./auth/github-oauth";
+import { type Config, isAuthorizedLogin, loadConfig, type WorkerEnv } from "./config";
+import { createTlsRangeRequest } from "./github/range-http";
 import { GitHubReader } from "./github/reader";
+import { createGitHubClients } from "./github/session";
 import { createGitHubMcpServer } from "./mcp/server";
-import { AesGcmTokenCodec } from "./security/reference-token";
-import type { AuthProps, WorkerEnv } from "./types";
+import { createPublicRoutes } from "./routes";
+import { ReferenceTokens } from "./security/reference-token";
 
+const rangeRequest = createTlsRangeRequest(connect);
+
+function createReader(config: Config, origin: string): GitHubReader {
+  return new GitHubReader({
+    artifactBaseUrl: origin,
+    clients: createGitHubClients(config.github),
+    rangeRequest,
+    tokens: new ReferenceTokens(config.referenceTokenKey),
+  });
+}
+
+/** Serves `/mcp` for requests that carry a valid MCP access token. */
 class McpApiHandler extends WorkerEntrypoint<WorkerEnv, AuthProps> {
   async fetch(request: Request): Promise<Response> {
+    const config = loadConfig(this.env);
     // Checked on every request, so removing a login takes effect without waiting for its tokens to expire.
-    if (!isAuthorizedLogin(this.env.AUTHORIZED_GITHUB_LOGINS, this.ctx.props.githubLogin)) {
+    if (!isAuthorizedLogin(config, this.ctx.props.githubLogin)) {
       return new Response("This GitHub account is not authorized for this connector", { status: 403 });
     }
-    const reader = new GitHubReader(
-      githubAppConfig(this.env),
-      new AesGcmTokenCodec(referenceTokenKey(this.env)),
-      { artifactBaseUrl: new URL(request.url).origin, rangeRequest: requestRangeOverTls },
-    );
-    const handler = createMcpHandler(
-      () => createGitHubMcpServer(reader, this.ctx.props.githubUserId),
-      {
+    const reader = createReader(config, new URL(request.url).origin);
+    const handler = createMcpHandler(() => createGitHubMcpServer(reader, this.ctx.props.githubUserId), {
       authContext: { props: this.ctx.props },
       route: "/mcp",
-      },
-    );
+    });
     return handler.fetch(request);
   }
 }
@@ -37,7 +45,7 @@ export default new OAuthProvider<WorkerEnv>({
   authorizeEndpoint: "/authorize",
   clientIdMetadataDocumentEnabled: true,
   clientRegistrationEndpoint: "/register",
-  defaultHandler: GitHubOAuthHandler,
+  defaultHandler: createPublicRoutes(createReader),
   resourceMetadata: {
     bearer_methods_supported: ["header"],
     resource_name: "GitHub MCP",

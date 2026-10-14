@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ConnectorInputError } from "../src/github/errors";
-import { parseRepository, validateCodeSearchQuery } from "../src/github/repository";
+import { GatewayError } from "../src/errors";
+import { parseRepository, validateSearchQuery } from "../src/github/repository";
 
 describe("parseRepository", () => {
   it("normalizes an owner/name pair", () => {
@@ -14,22 +14,22 @@ describe("parseRepository", () => {
   it.each(["", "repository", "owner/repo/extra", "https://github.com/owner/repo"])(
     "rejects invalid repository input %j",
     (value) => {
-      expect(() => parseRepository(value)).toThrow(ConnectorInputError);
+      expect(() => parseRepository(value)).toThrow(GatewayError);
     },
   );
 });
 
-describe("validateCodeSearchQuery", () => {
+describe("validateSearchQuery", () => {
   it("allows GitHub search syntax that does not alter repository scope", () => {
-    expect(validateCodeSearchQuery(" language:typescript addEventListener ")).toBe(
+    expect(validateSearchQuery(" language:typescript addEventListener ")).toBe(
       "language:typescript addEventListener",
     );
   });
 
-  it.each(["", "repo:other/repo token", "token ORG:example", "user:someone token"])(
+  it.each(["", "repo:other/repo token", "token ORG:example", "user:someone token", "-repo:other/repo token"])(
     "rejects empty or scope-changing input %j",
     (value) => {
-      expect(() => validateCodeSearchQuery(value)).toThrow(ConnectorInputError);
+      expect(() => validateSearchQuery(value)).toThrow(GatewayError);
     },
   );
 });

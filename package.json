@@ -27,7 +27,6 @@
     "@modelcontextprotocol/server": "2.0.0",
     "@octokit/auth-app": "8.3.0",
     "agents": "0.21.0",
-    "hono": "4.12.27",
     "octokit": "5.0.5",
     "zod": "4.4.3"
   },

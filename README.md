@@ -88,7 +88,7 @@ The MCP endpoint is:
 https://github-mcp.<your-subdomain>.workers.dev/mcp
 ```
 
-The first connection opens a GitHub sign-in page. After you approve it, the Worker checks your username against `AUTHORIZED_GITHUB_LOGINS`.
+The first connection opens an approval page on the Worker. It shows the client's name and the address that will receive the access token. After you approve, you sign in with GitHub, and the Worker checks your username against `AUTHORIZED_GITHUB_LOGINS`. The browser remembers the approval for 30 days for that client and address.
 
 - **Claude** (web, desktop, and mobile): go to **Customize → Connectors**, click **+ Add → Add custom connector**, and enter a name and the endpoint. On Team and Enterprise plans, an owner adds the connector under **Organization settings → Connectors** first.
 - **Claude Code**: run `claude mcp add --transport http github https://github-mcp.<your-subdomain>.workers.dev/mcp`, then run `/mcp` inside Claude Code to sign in.
@@ -98,10 +98,11 @@ To check that the Worker is running, open `/health` on the Worker's address. It 
 
 ## How access works
 
-Two separate checks decide what a client can read:
+Three separate checks decide what a client can read:
 
-1. **Who can connect.** Sign-in uses GitHub's user authorization for your GitHub App. The Worker uses the resulting user token once, to look up the GitHub username, and then discards it. Only usernames in `AUTHORIZED_GITHUB_LOGINS` receive an MCP access token, and the Worker checks the list again on every request.
-2. **What can be read.** Every GitHub read uses a short-lived installation token for your GitHub App, so the server can read exactly the repositories in the app's installation. The Worker keeps no second repository list.
+1. **Which client gets a token.** MCP clients register themselves, so the Worker asks you to approve each client and redirect address before it starts a sign-in. Without this step, a page that a signed-in user visits could start a sign-in for a client that the attacker controls. GitHub skips its own prompt after the first approval, so it does not give this protection.
+2. **Who can connect.** Sign-in uses GitHub's user authorization for your GitHub App. The Worker uses the resulting user token once, to look up the GitHub username, and then discards it. Only usernames in `AUTHORIZED_GITHUB_LOGINS` receive an MCP access token, and the Worker checks the list again on every request.
+3. **What can be read.** Every GitHub read uses a short-lived installation token for your GitHub App, so the server can read exactly the repositories in the app's installation. The Worker keeps no second repository list.
 
 Continuation tokens are bound to the GitHub user ID of the person who signed in. The server has no write operations.
 

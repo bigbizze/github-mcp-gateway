@@ -8,6 +8,7 @@ Problems in scope include:
 
 - Reading a repository that the GitHub App installation does not cover
 - Connecting with a GitHub account that is not in `AUTHORIZED_GITHUB_LOGINS`
+- Getting an MCP access token for a client that the user did not approve on the consent page
 - Forging, replaying, or reusing continuation tokens or artifact links outside their intended scope
 - Leaking GitHub App credentials, installation tokens, or OAuth tokens in responses or logs
 - Any write to GitHub through this server

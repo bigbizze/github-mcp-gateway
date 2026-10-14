@@ -1,23 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { GitHubReader, type OctokitLike } from "../src/github/reader";
-import { AesGcmTokenCodec } from "../src/security/reference-token";
+import { describe, expect, it } from "vitest";
+import { type RequestHandler, runData, testReader } from "./support/reader";
 
-function patchReader(request: OctokitLike["request"]): GitHubReader {
-  const octokit: OctokitLike = { request };
-  return new GitHubReader(
-    { appId: "1", privateKey: "key" },
-    new AesGcmTokenCodec("34".repeat(32)),
-    {
-      artifactBaseUrl: "https://worker.example",
-      authFactory: () => async (options) => ({ token: options.type === "app" ? "app" : "installation" }),
-      octokitFactory: () => octokit,
-    },
-  );
+function patchReader(request: RequestHandler) {
+  return testReader({ request }).reader;
 }
 
 describe("pinned GitHub-provided file patches", () => {
   it("represents a root commit base and classifies a symbolic link", async () => {
-    const reader = patchReader(vi.fn(async (route) => {
+    const reader = patchReader(async (route) => {
       if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 1 }, headers: {} };
       if (route === "GET /repos/{owner}/{repo}/commits/{ref}") {
         return {
@@ -33,13 +23,13 @@ describe("pinned GitHub-provided file patches", () => {
         return { data: { type: "symlink" }, headers: {} };
       }
       throw new Error(`Unexpected route ${route}`);
-    }));
+    });
 
-    const result = (await reader.execute("fetch_commit_file_patch", {
+    const result = await runData(reader, "fetch_commit_file_patch", {
       commit_sha: "root-sha",
       path: "link",
       repository_full_name: "owner/repo",
-    }, 42)).data;
+    });
 
     expect(result).toMatchObject({
       base: { type: "empty" },
@@ -53,7 +43,7 @@ describe("pinned GitHub-provided file patches", () => {
   });
 
   it("does not invent an omitted submodule patch", async () => {
-    const reader = patchReader(vi.fn(async (route) => {
+    const reader = patchReader(async (route) => {
       if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 1 }, headers: {} };
       if (route === "GET /repos/{owner}/{repo}/commits/{ref}") {
         return {
@@ -69,13 +59,13 @@ describe("pinned GitHub-provided file patches", () => {
         return { data: { submodule_git_url: "https://github.com/other/module", type: "file" }, headers: {} };
       }
       throw new Error(`Unexpected route ${route}`);
-    }));
+    });
 
-    const result = (await reader.execute("fetch_commit_file_patch", {
+    const result = await runData(reader, "fetch_commit_file_patch", {
       commit_sha: "target-sha",
       path: "vendor/module",
       repository_full_name: "owner/repo",
-    }, 42)).data;
+    });
     expect(result).toMatchObject({
       base: { commit_sha: "base-sha", type: "commit" },
       file_type: "submodule",
@@ -85,7 +75,7 @@ describe("pinned GitHub-provided file patches", () => {
   });
 
   it("keeps fork repository descriptors and rename paths for pull requests", async () => {
-    const reader = patchReader(vi.fn(async (route) => {
+    const reader = patchReader(async (route) => {
       if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 1 }, headers: {} };
       if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
         return {
@@ -110,13 +100,13 @@ describe("pinned GitHub-provided file patches", () => {
       }
       if (route === "GET /repos/{owner}/{repo}/contents/{path}") return { data: { type: "file" }, headers: {} };
       throw new Error(`Unexpected route ${route}`);
-    }));
+    });
 
-    const result = (await reader.execute("fetch_pr_file_patch", {
+    const result = await runData(reader, "fetch_pr_file_patch", {
       path: "new-name.ts",
       pr_number: 9,
       repository_full_name: "upstream/repo",
-    }, 42)).data;
+    });
     expect(result).toMatchObject({
       base: { commit_sha: "base-sha", repository_full_name: "upstream/repo" },
       path: "new-name.ts",

@@ -1,4 +1,27 @@
-import type { GitHubAppConfig, WorkerEnv } from "./types";
+import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import type { GitHubAppConfig } from "./github/session";
+
+/** Worker bindings. The seven strings are the secrets listed in wrangler.jsonc. */
+export interface WorkerEnv {
+  AUTHORIZED_GITHUB_LOGINS: string;
+  COOKIE_ENCRYPTION_KEY: string;
+  GITHUB_APP_ID: string;
+  GITHUB_APP_PRIVATE_KEY: string;
+  GITHUB_CLIENT_ID: string;
+  GITHUB_CLIENT_SECRET: string;
+  OAUTH_KV: KVNamespace;
+  OAUTH_PROVIDER: OAuthHelpers;
+  REFERENCE_TOKEN_KEY: string;
+}
+
+/** Validated configuration. Every entry point reads the secrets through `loadConfig`. */
+export interface Config {
+  authorizedLogins: ReadonlySet<string>;
+  cookieSecret: string;
+  github: GitHubAppConfig;
+  oauthClient: { id: string; secret: string };
+  referenceTokenKey: string;
+}
 
 export class ConfigurationError extends Error {
   constructor(message: string) {
@@ -14,42 +37,52 @@ export function parseAuthorizedLogins(value: string | undefined): Set<string> {
       .map((login) => login.trim().toLowerCase())
       .filter(Boolean),
   );
-
   if (logins.size === 0) {
     throw new ConfigurationError("AUTHORIZED_GITHUB_LOGINS must contain at least one GitHub login");
   }
-
   return logins;
 }
 
-export function isAuthorizedLogin(value: string | undefined, login: string): boolean {
-  return parseAuthorizedLogins(value).has(login.toLowerCase());
+export function isAuthorizedLogin(config: Config, login: string): boolean {
+  return config.authorizedLogins.has(login.toLowerCase());
 }
 
 function requireValue(name: string, value: string | undefined): string {
-  if (!value?.trim()) {
-    throw new ConfigurationError(`${name} is required`);
-  }
-
+  if (!value?.trim()) throw new ConfigurationError(`${name} is required`);
   return value;
 }
 
-function requireSecret(name: string, value: string | undefined): string {
-  const secret = requireValue(name, value);
-  if (secret.length < 32) {
-    throw new ConfigurationError(`${name} must contain at least 32 characters`);
-  }
+function requireCookieSecret(value: string | undefined): string {
+  const secret = requireValue("COOKIE_ENCRYPTION_KEY", value);
+  if (secret.length < 32) throw new ConfigurationError("COOKIE_ENCRYPTION_KEY must contain at least 32 characters");
   return secret;
 }
 
-export function referenceTokenKey(env: WorkerEnv): string {
-  const key = requireValue("REFERENCE_TOKEN_KEY", env.REFERENCE_TOKEN_KEY);
+function requireReferenceTokenKey(value: string | undefined): string {
+  const key = requireValue("REFERENCE_TOKEN_KEY", value);
   if (!/^[0-9a-f]{64}$/iu.test(key)) {
     throw new ConfigurationError(
       "REFERENCE_TOKEN_KEY must contain 32 random bytes encoded as 64 hexadecimal characters",
     );
   }
   return key;
+}
+
+/** Reads and checks every secret. Throws ConfigurationError for the first value that is missing or invalid. */
+export function loadConfig(env: WorkerEnv): Config {
+  return {
+    authorizedLogins: parseAuthorizedLogins(env.AUTHORIZED_GITHUB_LOGINS),
+    cookieSecret: requireCookieSecret(env.COOKIE_ENCRYPTION_KEY),
+    github: {
+      appId: requireValue("GITHUB_APP_ID", env.GITHUB_APP_ID),
+      privateKey: toPkcs8(normalizePrivateKey(requireValue("GITHUB_APP_PRIVATE_KEY", env.GITHUB_APP_PRIVATE_KEY))),
+    },
+    oauthClient: {
+      id: requireValue("GITHUB_CLIENT_ID", env.GITHUB_CLIENT_ID),
+      secret: requireValue("GITHUB_CLIENT_SECRET", env.GITHUB_CLIENT_SECRET),
+    },
+    referenceTokenKey: requireReferenceTokenKey(env.REFERENCE_TOKEN_KEY),
+  };
 }
 
 const singleLinePem =
@@ -113,21 +146,4 @@ export function toPkcs8(pem: string): string {
   for (const byte of der) binary += String.fromCharCode(byte);
   const lines = btoa(binary).match(/.{1,64}/gu) ?? [];
   return ["-----BEGIN PRIVATE KEY-----", ...lines, "-----END PRIVATE KEY-----", ""].join("\n");
-}
-
-export function githubAppConfig(env: WorkerEnv): GitHubAppConfig {
-  const privateKey = requireValue("GITHUB_APP_PRIVATE_KEY", env.GITHUB_APP_PRIVATE_KEY);
-  return {
-    appId: requireValue("GITHUB_APP_ID", env.GITHUB_APP_ID),
-    privateKey: toPkcs8(normalizePrivateKey(privateKey)),
-  };
-}
-
-export function validateOAuthConfiguration(env: WorkerEnv): void {
-  parseAuthorizedLogins(env.AUTHORIZED_GITHUB_LOGINS);
-  githubAppConfig(env);
-  requireSecret("COOKIE_ENCRYPTION_KEY", env.COOKIE_ENCRYPTION_KEY);
-  requireValue("GITHUB_CLIENT_ID", env.GITHUB_CLIENT_ID);
-  requireValue("GITHUB_CLIENT_SECRET", env.GITHUB_CLIENT_SECRET);
-  referenceTokenKey(env);
 }

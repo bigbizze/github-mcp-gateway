@@ -1,70 +1,43 @@
 import { describe, expect, it } from "vitest";
-import {
-  ConnectorInputError,
-  githubErrorDiagnostic,
-  safeGitHubError,
-} from "../src/github/errors";
+import { GatewayError, githubStatus, toGatewayError } from "../src/errors";
 
-describe("githubErrorDiagnostic", () => {
-  it("reports useful fields and redacts credentials", () => {
-    const error = Object.assign(
-      new Error(
-        "failed with github_pat_sensitive_value and eyJ12345678.abcdefgh.ijklmnop " +
-          "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
-        { cause: new Error("cause contains ghp_sensitive_value") },
-      ),
-      { status: 401 },
-    );
+function githubError(status: number, headers: Record<string, string> = {}): Error {
+  return Object.assign(new Error("private detail with github_pat_sensitive_value"), { response: { headers }, status });
+}
 
-    expect(githubErrorDiagnostic(error)).toEqual({
-      cause: { message: "cause contains [REDACTED_GITHUB_TOKEN]", name: "Error" },
-      message:
-        "failed with [REDACTED_GITHUB_TOKEN] and [REDACTED_JWT] [REDACTED_PRIVATE_KEY]",
-      name: "Error",
-      status: 401,
-    });
+describe("toGatewayError", () => {
+  it("returns a GatewayError unchanged", () => {
+    const error = new GatewayError("invalid_arguments", "Safe input guidance");
+    expect(toGatewayError(error)).toBe(error);
   });
 
-  it("handles non-Error values without logging their contents", () => {
-    expect(githubErrorDiagnostic({ token: "private" })).toEqual({
-      message: "A non-Error value was thrown",
-      name: "NonError",
-      status: null,
-    });
+  it("never passes through upstream messages", () => {
+    for (const error of [new Error("github_pat_sensitive_value"), githubError(404), githubError(500), { token: "x" }]) {
+      expect(toGatewayError(error).message).not.toContain("sensitive");
+    }
+  });
+
+  it.each([
+    [401, {}, "installation_required", false],
+    [403, {}, "forbidden", false],
+    [403, { "x-ratelimit-remaining": "0" }, "rate_limited", true],
+    [404, {}, "not_found", false],
+    [429, {}, "rate_limited", true],
+    [502, {}, "upstream_error", true],
+  ] as const)("maps HTTP %i %j to %s", (status, headers, code, retryable) => {
+    expect(toGatewayError(githubError(status, headers))).toMatchObject({ code, retryable });
+  });
+
+  it("reports the rate-limit reset time", () => {
+    expect(toGatewayError(githubError(403, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1700000000" })).message)
+      .toBe("GitHub API rate limit exceeded; retry after 2023-11-14T22:13:20.000Z");
   });
 });
 
-describe("safeGitHubError", () => {
-  it("returns deliberate connector input errors", () => {
-    expect(safeGitHubError(new ConnectorInputError("Safe input guidance"))).toBe(
-      "Safe input guidance",
-    );
-  });
-
-  it("does not expose arbitrary upstream messages or credentials", () => {
-    expect(safeGitHubError(new Error("request failed with github_pat_sensitive-value"))).toBe(
-      "Unexpected GitHub integration error",
-    );
-  });
-
-  it("normalizes common GitHub status failures", () => {
-    expect(safeGitHubError(Object.assign(new Error("private detail"), { status: 404 }))).toBe(
-      "Repository or GitHub resource was not found or is not installed",
-    );
-    expect(safeGitHubError(Object.assign(new Error("private detail"), { status: 401 }))).toBe(
-      "GitHub rejected the connector's installation credentials",
-    );
-  });
-
-  it("reports a GitHub rate-limit reset without returning the upstream body", () => {
-    const error = Object.assign(new Error("private detail"), {
-      response: {
-        headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1700000000" },
-      },
-      status: 403,
-    });
-    expect(safeGitHubError(error)).toBe(
-      "GitHub API rate limit exceeded; retry after 2023-11-14T22:13:20.000Z",
-    );
+describe("githubStatus", () => {
+  it("reads the status only from Error values", () => {
+    expect(githubStatus(githubError(404))).toBe(404);
+    expect(githubStatus({ status: 404 })).toBeUndefined();
+    expect(githubStatus(new Error("no status"))).toBeUndefined();
   });
 });

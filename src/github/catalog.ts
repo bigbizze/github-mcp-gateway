@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { invalidArguments } from "../errors";
 
 const repository = z
   .string()
@@ -10,20 +11,24 @@ const standardPerPage = positive.max(20).default(20);
 const commentPerPage = positive.max(10).default(10);
 const continuationToken = z.string().min(1);
 const dateTime = z.iso.datetime({ offset: true });
+const qualifierValue = z
+  .string()
+  .regex(/^[^\s"]+$/u, "Must be one value without spaces or quotes")
+  .describe("One search qualifier value. It cannot contain spaces or quotes.");
 
-const nextRequestSchema = z.object({
+const nextRequestSchema = z.strictObject({
   action: z.literal("execute"),
   arguments: z.record(z.string(), z.unknown()),
   operation: z.string(),
 });
-const paginationSchema = z.object({
+const paginationSchema = z.strictObject({
   has_next: z.boolean(),
   page: positive,
   per_page: positive,
   returned: z.number().int().min(0),
 });
 const collectionResult = (key: string, item: z.ZodType, metadata: z.ZodRawShape = {}) =>
-  z.object({
+  z.strictObject({
     ...metadata,
     [key]: z.array(item),
     next_request: nextRequestSchema.optional(),
@@ -32,7 +37,7 @@ const collectionResult = (key: string, item: z.ZodType, metadata: z.ZodRawShape 
   });
 const nullableString = z.string().nullable();
 const nullableNumber = z.number().nullable();
-const repositoryItem = z.object({
+const repositoryItem = z.strictObject({
   default_branch: nullableString,
   full_name: nullableString,
   private: z.boolean(),
@@ -49,20 +54,20 @@ const repositoryResult = repositoryItem.extend({
   updated_at: nullableString,
   visibility: nullableString,
 });
-const branchResult = z.object({
+const branchResult = z.strictObject({
   commit_sha: nullableString,
   name: nullableString,
   protected: z.boolean(),
   repository_full_name: z.string(),
 });
-const codeItem = z.object({
+const codeItem = z.strictObject({
   name: nullableString,
   path: nullableString,
   repository_full_name: nullableString,
   sha: nullableString,
   url: nullableString,
 });
-const directoryEntry = z.object({
+const directoryEntry = z.strictObject({
   name: nullableString,
   path: nullableString,
   sha: nullableString,
@@ -70,7 +75,7 @@ const directoryEntry = z.object({
   type: nullableString,
   url: nullableString,
 });
-const fileResult = z.object({
+const fileResult = z.strictObject({
   binary: z.boolean().nullable().optional(),
   blob_sha: nullableString,
   commit_sha: nullableString,
@@ -87,7 +92,7 @@ const fileResult = z.object({
   total_lines: z.number().int().min(0).optional(),
   url: nullableString,
 });
-const commitItem = z.object({
+const commitItem = z.strictObject({
   author: nullableString,
   authored_at: nullableString,
   commit_sha: nullableString,
@@ -95,7 +100,7 @@ const commitItem = z.object({
   message_reference_token: z.string(),
   url: nullableString,
 });
-const changedFileItem = z.object({
+const changedFileItem = z.strictObject({
   additions: nullableNumber,
   blob_sha: nullableString,
   changes: nullableNumber,
@@ -105,7 +110,7 @@ const changedFileItem = z.object({
   status: nullableString,
   url: nullableString,
 });
-const textWindow = z.object({
+const textWindow = z.strictObject({
   content: z.string().nullable().optional(),
   end_line: positive.optional(),
   next_request: nextRequestSchema.optional(),
@@ -115,10 +120,10 @@ const textWindow = z.object({
   total_lines: z.number().int().min(0).optional(),
 });
 const pinnedDescriptor = z.union([
-  z.object({ type: z.literal("empty") }),
-  z.object({ commit_sha: nullableString, repository_full_name: nullableString, type: z.literal("commit") }),
+  z.strictObject({ type: z.literal("empty") }),
+  z.strictObject({ commit_sha: nullableString, repository_full_name: nullableString, type: z.literal("commit") }),
 ]);
-const patchResult = z.object({
+const patchResult = z.strictObject({
   base: pinnedDescriptor,
   blob_sha: nullableString,
   commit_sha: nullableString.optional(),
@@ -134,7 +139,7 @@ const patchResult = z.object({
   status: nullableString,
   target: pinnedDescriptor,
 });
-const pullRequestItem = z.object({
+const pullRequestItem = z.strictObject({
   author: nullableString,
   base: nullableString,
   created_at: nullableString,
@@ -146,7 +151,7 @@ const pullRequestItem = z.object({
   updated_at: nullableString,
   url: nullableString,
 });
-const issueItem = z.object({
+const issueItem = z.strictObject({
   assignees: z.array(nullableString),
   author: nullableString,
   created_at: nullableString,
@@ -157,7 +162,7 @@ const issueItem = z.object({
   updated_at: nullableString,
   url: nullableString,
 });
-const commentItem = z.object({
+const commentItem = z.strictObject({
   author: nullableString,
   body_reference_token: z.string(),
   comment_id: nullableNumber,
@@ -165,7 +170,7 @@ const commentItem = z.object({
   updated_at: nullableString,
   url: nullableString,
 });
-const reviewItem = z.object({
+const reviewItem = z.strictObject({
   author: nullableString,
   body_reference_token: z.string(),
   commit_sha: nullableString,
@@ -174,7 +179,7 @@ const reviewItem = z.object({
   submitted_at: nullableString,
   url: nullableString,
 });
-const workflowRunItem = z.object({
+const workflowRunItem = z.strictObject({
   attempt: nullableNumber,
   conclusion: nullableString,
   created_at: nullableString,
@@ -189,7 +194,7 @@ const workflowRunItem = z.object({
   url: nullableString,
   workflow_id: nullableNumber,
 });
-const workflowJobItem = z.object({
+const workflowJobItem = z.strictObject({
   completed_at: nullableString,
   conclusion: nullableString,
   head_sha: nullableString,
@@ -201,7 +206,7 @@ const workflowJobItem = z.object({
   status: nullableString,
   url: nullableString,
 });
-const workflowStepItem = z.object({
+const workflowStepItem = z.strictObject({
   completed_at: nullableString,
   conclusion: nullableString,
   name: nullableString,
@@ -209,7 +214,7 @@ const workflowStepItem = z.object({
   started_at: nullableString,
   status: nullableString,
 });
-const artifactItem = z.object({
+const artifactItem = z.strictObject({
   artifact_id: nullableNumber,
   created_at: nullableString,
   expired: z.boolean(),
@@ -218,24 +223,24 @@ const artifactItem = z.object({
   size_in_bytes: nullableNumber,
   updated_at: nullableString,
 });
-const memberItem = z.object({
+const memberItem = z.strictObject({
   avatar_url: nullableString,
   type: nullableString,
   url: nullableString,
   username: nullableString,
 });
-const commitResult = z.object({
+const commitResult = z.strictObject({
   author: nullableString,
   authored_at: nullableString,
   commit_sha: nullableString,
   message: textWindow,
   parents: z.array(nullableString),
   repository_full_name: z.string(),
-  stats: z.object({ additions: z.number(), deletions: z.number(), total: z.number() }).nullable(),
+  stats: z.strictObject({ additions: z.number(), deletions: z.number(), total: z.number() }).nullable(),
   tree_sha: nullableString,
   url: nullableString,
 });
-const statusItem = z.object({
+const statusItem = z.strictObject({
   context: nullableString,
   created_at: nullableString,
   creator: nullableString,
@@ -244,12 +249,12 @@ const statusItem = z.object({
   target_url: nullableString,
   updated_at: nullableString,
 });
-const refDescriptor = z.object({
+const refDescriptor = z.strictObject({
   commit_sha: nullableString,
   ref: nullableString,
   repository_full_name: nullableString,
 });
-const pullRequestResult = z.object({
+const pullRequestResult = z.strictObject({
   additions: nullableNumber,
   author: nullableString,
   base: refDescriptor,
@@ -284,7 +289,7 @@ const artifactDownloadResult = artifactItem.extend({
   expires_in_seconds: z.number().int().positive(),
   uri: z.url(),
 });
-const membershipResult = z.object({
+const membershipResult = z.strictObject({
   organization: z.string(),
   organization_url: nullableString,
   role: nullableString,
@@ -315,7 +320,7 @@ const fileInitial = z
 export const operationCatalog = {
   list_repositories: {
     description: "List repositories from GitHub App installations with a bounded lazy scan.",
-    input: z.object({ continuation_token: continuationToken.optional(), page_size: positive.max(20).default(20) }),
+    input: z.strictObject({ continuation_token: continuationToken.optional(), page_size: positive.max(20).default(20) }),
     result: collectionResult("repositories", repositoryItem, {
       state: z.enum(["complete", "partial", "seeking"]),
     }),
@@ -323,7 +328,7 @@ export const operationCatalog = {
   },
   search_repositories: {
     description: "Search installed repository names with a bounded lazy scan.",
-    input: z.object({
+    input: z.strictObject({
       continuation_token: continuationToken.optional(),
       page_size: positive.max(20).default(20),
       query: z.string().min(1),
@@ -335,19 +340,19 @@ export const operationCatalog = {
   },
   get_repository: {
     description: "Get metadata for one installed repository.",
-    input: z.object({ repository_full_name: repository }),
+    input: z.strictObject({ repository_full_name: repository }),
     result: repositoryResult,
     signature: "get_repository(repository_full_name)",
   },
   get_branch: {
     description: "Get one named branch/ref and its pinned commit SHA; verifies that it exists.",
-    input: z.object({ branch: z.string().min(1), repository_full_name: repository }),
+    input: z.strictObject({ branch: z.string().min(1), repository_full_name: repository }),
     result: branchResult,
     signature: "get_branch(repository_full_name, branch)",
   },
   search_code: {
     description: "Search code within one installed repository.",
-    input: z.object({
+    input: z.strictObject({
       page,
       per_page: standardPerPage,
       query: z.string().min(1),
@@ -358,7 +363,7 @@ export const operationCatalog = {
   },
   list_directory: {
     description: "List one directory with local offset pagination.",
-    input: z.object({
+    input: z.strictObject({
       limit: positive.max(50).default(20),
       offset: z.number().int().min(0).default(0),
       path: z.string().default(""),
@@ -376,13 +381,13 @@ export const operationCatalog = {
   },
   fetch_file: {
     description: "Read file content by line (max 16,000 UTF-8 bytes/result). Without end_line, overflow returns state=partial with next_request. With end_line, overflow returns range_too_large. One-line overflow returns line_too_large.",
-    input: z.union([fileInitial, z.object({ continuation_token: continuationToken })]),
+    input: z.union([fileInitial, z.strictObject({ continuation_token: continuationToken })]),
     result: fileResult,
     signature: "fetch_file(initial_request | continuation_token)",
   },
   fetch: {
     description: "Map one allowlisted GitHub HTTPS URL to a catalog operation.",
-    input: z.union([z.object({ url: z.url() }), z.object({ continuation_token: continuationToken })]),
+    input: z.strictObject({ url: z.url() }),
     result: z.union([
       repositoryResult,
       branchResult,
@@ -394,11 +399,11 @@ export const operationCatalog = {
       collectionResult("entries", directoryEntry),
       collectionResult("issues", issueItem),
     ]),
-    signature: "fetch(url | continuation_token)",
+    signature: "fetch(url)",
   },
   search_commits: {
     description: "Search or list commits in one repository.",
-    input: z.object({
+    input: z.strictObject({
       page,
       path: z.string().min(1).optional(),
       per_page: standardPerPage,
@@ -413,26 +418,26 @@ export const operationCatalog = {
   },
   fetch_commit: {
     description: "Get one pinned commit object with its tree SHA and parent SHAs, without its file list.",
-    input: z.object({ commit_sha: z.string().min(1), repository_full_name: repository }),
+    input: z.strictObject({ commit_sha: z.string().min(1), repository_full_name: repository }),
     result: commitResult,
     signature: "fetch_commit(repository_full_name, commit_sha)",
   },
   list_commit_changed_filenames: {
     description: "List changed filenames for one commit.",
-    input: z.object({ commit_sha: z.string().min(1), page, per_page: standardPerPage, repository_full_name: repository }),
+    input: z.strictObject({ commit_sha: z.string().min(1), page, per_page: standardPerPage, repository_full_name: repository }),
     result: collectionResult("files", changedFileItem, { commit_sha: nullableString }),
     signature: "list_commit_changed_filenames(repository_full_name, commit_sha, page?, per_page?)",
   },
   fetch_commit_file_patch: {
     description: "Return GitHub's patch for one exact changed commit path when available.",
-    input: z.object({ commit_sha: z.string().min(1), path: z.string().min(1), repository_full_name: repository }),
+    input: z.strictObject({ commit_sha: z.string().min(1), path: z.string().min(1), repository_full_name: repository }),
     result: patchResult,
     signature: "fetch_commit_file_patch(repository_full_name, commit_sha, path)",
   },
   get_commit_combined_status: {
     description: "Get the combined commit status and one bounded status page.",
-    input: z.object({ page, per_page: standardPerPage, ref: z.string().min(1), repository_full_name: repository }),
-    result: z.object({
+    input: z.strictObject({ page, per_page: standardPerPage, ref: z.string().min(1), repository_full_name: repository }),
+    result: z.strictObject({
       commit_sha: nullableString,
       next_request: nextRequestSchema.optional(),
       pagination: paginationSchema,
@@ -445,9 +450,9 @@ export const operationCatalog = {
   },
   search_prs: {
     description: "Search or list pull requests.",
-    input: z.object({
-      base: z.string().min(1).optional(),
-      head: z.string().min(1).optional(),
+    input: z.strictObject({
+      base: qualifierValue.optional(),
+      head: qualifierValue.optional(),
       page,
       per_page: standardPerPage,
       query: z.string().min(1).optional(),
@@ -459,38 +464,38 @@ export const operationCatalog = {
   },
   get_pr_info: {
     description: "Get pull request metadata with an inline body window.",
-    input: z.object({ pr_number: positive, repository_full_name: repository }),
+    input: z.strictObject({ pr_number: positive, repository_full_name: repository }),
     result: pullRequestResult,
     signature: "get_pr_info(repository_full_name, pr_number)",
   },
   list_pr_changed_filenames: {
     description: "List changed filenames for one pull request.",
-    input: z.object({ page, per_page: standardPerPage, pr_number: positive, repository_full_name: repository }),
+    input: z.strictObject({ page, per_page: standardPerPage, pr_number: positive, repository_full_name: repository }),
     result: collectionResult("files", changedFileItem, { pr_number: z.number().int().positive() }),
     signature: "list_pr_changed_filenames(repository_full_name, pr_number, page?, per_page?)",
   },
   fetch_pr_file_patch: {
     description: "Return GitHub's patch for one exact changed pull request path when available.",
-    input: z.object({ path: z.string().min(1), pr_number: positive, repository_full_name: repository }),
+    input: z.strictObject({ path: z.string().min(1), pr_number: positive, repository_full_name: repository }),
     result: patchResult,
     signature: "fetch_pr_file_patch(repository_full_name, pr_number, path)",
   },
   list_pull_request_reviews: {
     description: "List pull request review metadata and body reference tokens.",
-    input: z.object({ page, per_page: commentPerPage, pr_number: positive, repository_full_name: repository }),
+    input: z.strictObject({ page, per_page: commentPerPage, pr_number: positive, repository_full_name: repository }),
     result: collectionResult("reviews", reviewItem, { pr_number: z.number().int().positive() }),
     signature: "list_pull_request_reviews(repository_full_name, pr_number, page?, per_page?)",
   },
   list_pull_request_comments: {
     description: "List pull request conversation comment metadata and body reference tokens.",
-    input: z.object({ page, per_page: commentPerPage, pr_number: positive, repository_full_name: repository }),
+    input: z.strictObject({ page, per_page: commentPerPage, pr_number: positive, repository_full_name: repository }),
     result: collectionResult("comments", commentItem, { pr_number: z.number().int().positive() }),
     signature: "list_pull_request_comments(repository_full_name, pr_number, page?, per_page?)",
   },
   search_issues: {
     description: "Search or list issues without pull requests.",
-    input: z.object({
-      assignee: z.string().min(1).optional(),
+    input: z.strictObject({
+      assignee: qualifierValue.optional(),
       labels: z.string().min(1).optional(),
       page,
       per_page: standardPerPage,
@@ -506,19 +511,19 @@ export const operationCatalog = {
   },
   fetch_issue: {
     description: "Get issue metadata with an inline body window.",
-    input: z.object({ issue_number: positive, repository_full_name: repository }),
+    input: z.strictObject({ issue_number: positive, repository_full_name: repository }),
     result: issueResult,
     signature: "fetch_issue(repository_full_name, issue_number)",
   },
   list_issue_comments: {
     description: "List issue comment metadata and body reference tokens.",
-    input: z.object({ issue_number: positive, page, per_page: commentPerPage, repository_full_name: repository }),
+    input: z.strictObject({ issue_number: positive, page, per_page: commentPerPage, repository_full_name: repository }),
     result: collectionResult("comments", commentItem, { issue_number: z.number().int().positive() }),
     signature: "list_issue_comments(repository_full_name, issue_number, page?, per_page?)",
   },
   fetch_commit_workflow_runs: {
     description: "List workflow-run status for one head commit SHA.",
-    input: z.object({ commit_sha: z.string().min(1), page, per_page: standardPerPage, repository_full_name: repository }),
+    input: z.strictObject({ commit_sha: z.string().min(1), page, per_page: standardPerPage, repository_full_name: repository }),
     result: collectionResult("workflow_runs", workflowRunItem, {
       commit_sha: z.string(),
       total_count: nullableNumber,
@@ -527,13 +532,13 @@ export const operationCatalog = {
   },
   fetch_workflow_run: {
     description: "Get one workflow run without jobs or artifacts.",
-    input: z.object({ repository_full_name: repository, run_id: positive }),
+    input: z.strictObject({ repository_full_name: repository, run_id: positive }),
     result: workflowRunResult,
     signature: "fetch_workflow_run(repository_full_name, run_id)",
   },
   fetch_workflow_run_jobs: {
     description: "List workflow jobs without embedded steps.",
-    input: z.object({
+    input: z.strictObject({
       filter: z.enum(["latest", "all"]).default("latest"),
       page,
       per_page: standardPerPage,
@@ -548,7 +553,7 @@ export const operationCatalog = {
   },
   fetch_workflow_job_steps: {
     description: "Read embedded workflow job steps with local offset pagination.",
-    input: z.object({ job_id: positive, limit: positive.max(50).default(20), offset: z.number().int().min(0).default(0), repository_full_name: repository }),
+    input: z.strictObject({ job_id: positive, limit: positive.max(50).default(20), offset: z.number().int().min(0).default(0), repository_full_name: repository }),
     result: collectionResult("steps", workflowStepItem, {
       job_id: z.number().int().positive(),
       next_offset: z.number().int().min(0).nullable(),
@@ -558,7 +563,7 @@ export const operationCatalog = {
   },
   fetch_workflow_run_artifacts: {
     description: "List workflow artifacts without downloading ZIP data.",
-    input: z.object({ name: z.string().min(1).optional(), page, per_page: standardPerPage, repository_full_name: repository, run_id: positive }),
+    input: z.strictObject({ name: z.string().min(1).optional(), page, per_page: standardPerPage, repository_full_name: repository, run_id: positive }),
     result: collectionResult("artifacts", artifactItem, {
       run_id: z.number().int().positive(),
       total_count: nullableNumber,
@@ -567,19 +572,19 @@ export const operationCatalog = {
   },
   download_workflow_artifact: {
     description: "Create a five-minute signed resource link for one whole artifact ZIP.",
-    input: z.object({ artifact_id: positive, repository_full_name: repository }),
+    input: z.strictObject({ artifact_id: positive, repository_full_name: repository }),
     result: artifactDownloadResult,
     signature: "download_workflow_artifact(repository_full_name, artifact_id)",
   },
   list_organization_members: {
     description: "List public and visible organization members.",
-    input: z.object({ organization: z.string().min(1), page, per_page: standardPerPage }),
+    input: z.strictObject({ organization: z.string().min(1), page, per_page: standardPerPage }),
     result: collectionResult("members", memberItem, { organization: z.string() }),
     signature: "list_organization_members(organization, page?, per_page?)",
   },
   search_organization_members: {
     description: "Search visible organization members with a bounded scan.",
-    input: z.object({ continuation_token: continuationToken.optional(), organization: z.string().min(1), page_size: positive.max(20).default(20), query: z.string().min(1) }),
+    input: z.strictObject({ continuation_token: continuationToken.optional(), organization: z.string().min(1), page_size: positive.max(20).default(20), query: z.string().min(1) }),
     result: collectionResult("members", memberItem, {
       organization: z.string(),
       state: z.enum(["complete", "partial", "seeking"]),
@@ -588,18 +593,18 @@ export const operationCatalog = {
   },
   get_organization_membership: {
     description: "Get one visible organization membership.",
-    input: z.object({ organization: z.string().min(1), username: z.string().min(1) }),
+    input: z.strictObject({ organization: z.string().min(1), username: z.string().min(1) }),
     result: membershipResult,
     signature: "get_organization_membership(organization, username)",
   },
   read_text: {
     description: "Read an exact text line range or continue a prior text window.",
     input: z.union([
-      z.object({ end_line: positive.optional(), reference_token: continuationToken, start_line: positive.optional() }).refine(
+      z.strictObject({ end_line: positive.optional(), reference_token: continuationToken, start_line: positive.optional() }).refine(
         (value) => value.end_line === undefined || value.start_line === undefined || value.end_line >= value.start_line,
         { message: "end_line must be greater than or equal to start_line", path: ["end_line"] },
       ),
-      z.object({ continuation_token: continuationToken }),
+      z.strictObject({ continuation_token: continuationToken }),
     ]),
     result: textWindow,
     signature: "read_text(reference_token, start_line?, end_line?) | read_text(continuation_token)",
@@ -607,6 +612,14 @@ export const operationCatalog = {
 } as const satisfies Record<string, OperationDefinition>;
 
 export type OperationName = keyof typeof operationCatalog;
+
+/** The validated arguments of one operation, with defaults applied. */
+export type OperationInput<N extends OperationName> = z.output<(typeof operationCatalog)[N]["input"]>;
+
+/** One validated operation request. Only `parseOperation` creates values of this type. */
+export type OperationCall = {
+  [N in OperationName]: { arguments: OperationInput<N>; operation: N };
+}[OperationName];
 
 export const operationNames = Object.keys(operationCatalog) as OperationName[];
 
@@ -619,6 +632,26 @@ const catalogSearchAliases: Partial<Record<OperationName, string>> = {
 
 export function isOperationName(value: string): value is OperationName {
   return Object.hasOwn(operationCatalog, value);
+}
+
+export function parseOperationName(value: string): OperationName {
+  if (!isOperationName(value)) throw invalidArguments(`Unknown operation '${value}'`);
+  return value;
+}
+
+function validationMessage(error: z.ZodError): string {
+  const first = error.issues[0];
+  if (!first) return "The operation arguments are invalid";
+  const path = first.path.length > 0 ? `${first.path.join(".")}: ` : "";
+  return `${path}${first.message}`;
+}
+
+/** Validates arguments against the operation's input schema and applies its defaults. */
+export function parseOperation(operation: string, argumentsValue: unknown): OperationCall {
+  const name = parseOperationName(operation);
+  const parsed = operationCatalog[name].input.safeParse(argumentsValue);
+  if (!parsed.success) throw invalidArguments(validationMessage(parsed.error));
+  return { arguments: parsed.data, operation: name } as OperationCall;
 }
 
 export const githubToolInputSchema = z.discriminatedUnion("action", [

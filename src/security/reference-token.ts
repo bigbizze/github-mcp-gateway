@@ -1,55 +1,32 @@
-import { ConfigurationError } from "../config";
+import { z } from "zod";
+import { GatewayError } from "../errors";
 
-const TOKEN_VERSION = 2;
+const TOKEN_VERSION = 3;
 const NONCE_BYTES = 12;
+const TAG_BYTES = 16;
 const textEncoder = new TextEncoder();
 
 export type TokenPurpose = "artifact" | "file" | "organization_scan" | "repository_scan" | "text";
 
-export interface ReferenceTokenPayload {
-  args_hash: string;
-  cursor: Record<string, unknown>;
-  exp: number;
-  iat: number;
+/** What a token may be used for. Both values are bound to the ciphertext as additional data. */
+export interface TokenScope {
   operation: string;
   purpose: TokenPurpose;
-  resource: Record<string, unknown>;
-  user_id: number;
-  v: 2;
 }
 
-export interface OpenTokenOptions {
-  operation: string;
-  purpose: TokenPurpose;
-  user_id?: number;
-}
+/** A user ID that the token must belong to, or "any" for a bearer link that works without sign-in. */
+export type TokenHolder = number | "any";
 
-export class ReferenceTokenError extends Error {
-  readonly code: "invalid_token" | "stale_reference";
+const envelopeSchema = z.object({
+  body: z.unknown(),
+  exp: z.number().int(),
+  iat: z.number().int(),
+  user_id: z.number().int(),
+  v: z.literal(TOKEN_VERSION),
+});
 
-  constructor(message: string, code: "invalid_token" | "stale_reference" = "invalid_token") {
-    super(message);
-    this.name = "ReferenceTokenError";
-    this.code = code;
-  }
-}
-
-export interface TokenCodec {
-  open(token: string, options: OpenTokenOptions): Promise<ReferenceTokenPayload>;
-  seal(payload: Omit<ReferenceTokenPayload, "v">): Promise<string>;
-}
-
-function decodeHexKey(value: string): Uint8Array {
-  if (!/^[0-9a-f]{64}$/iu.test(value)) {
-    throw new ConfigurationError(
-      "REFERENCE_TOKEN_KEY must contain 32 random bytes encoded as 64 hexadecimal characters",
-    );
-  }
-  const bytes = new Uint8Array(32);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
-  }
-  return bytes;
+function invalidToken(message = "The reference token is invalid"): GatewayError {
+  return new GatewayError("invalid_token", message);
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -58,146 +35,105 @@ function base64UrlEncode(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/gu, "");
 }
 
-function base64UrlDecode(value: string): Uint8Array {
-  if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw new ReferenceTokenError("The reference token is invalid");
+function base64UrlDecode(value: string): Uint8Array<ArrayBuffer> {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw invalidToken();
   const padded = value.replace(/-/gu, "+").replace(/_/gu, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-  let bytes: Uint8Array;
+  let bytes: Uint8Array<ArrayBuffer>;
   try {
-    const binary = atob(padded);
-    bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
   } catch {
-    throw new ReferenceTokenError("The reference token is invalid");
+    throw invalidToken();
   }
-  if (base64UrlEncode(bytes) !== value) {
-    throw new ReferenceTokenError("The reference token is invalid or was changed");
-  }
+  if (base64UrlEncode(bytes) !== value) throw invalidToken("The reference token is invalid or was changed");
   return bytes;
 }
 
-function isPayload(value: unknown): value is ReferenceTokenPayload {
-  if (!value || typeof value !== "object") return false;
-  const payload = value as Partial<ReferenceTokenPayload>;
-  return (
-    payload.v === TOKEN_VERSION &&
-    typeof payload.args_hash === "string" &&
-    typeof payload.cursor === "object" &&
-    payload.cursor !== null &&
-    typeof payload.exp === "number" &&
-    typeof payload.iat === "number" &&
-    typeof payload.operation === "string" &&
-    ["artifact", "file", "organization_scan", "repository_scan", "text"].includes(
-      payload.purpose ?? "",
-    ) &&
-    typeof payload.resource === "object" &&
-    payload.resource !== null &&
-    Number.isSafeInteger(payload.user_id)
-  );
+function decodeHexKey(value: string): Uint8Array<ArrayBuffer> {
+  if (!/^[0-9a-f]{64}$/iu.test(value)) {
+    throw new Error("REFERENCE_TOKEN_KEY must contain 32 random bytes encoded as 64 hexadecimal characters");
+  }
+  return Uint8Array.from({ length: 32 }, (_, index) => Number.parseInt(value.slice(index * 2, index * 2 + 2), 16));
 }
 
-function routingAdditionalData(purpose: TokenPurpose, operation: string): ArrayBuffer {
-  return textEncoder.encode(`github-mcp.reference-token.v${TOKEN_VERSION}\0${purpose}\0${operation}`).buffer as ArrayBuffer;
+function additionalData(scope: TokenScope): Uint8Array<ArrayBuffer> {
+  return textEncoder.encode(`github-mcp.reference-token.v${TOKEN_VERSION}\0${scope.purpose}\0${scope.operation}`);
 }
 
-export class AesGcmTokenCodec implements TokenCodec {
-  private readonly keyPromise: Promise<CryptoKey>;
+/**
+ * Encrypts continuation tokens and artifact links with AES-256-GCM. A token carries one JSON
+ * body. `open` returns the body only after it passes the caller's schema.
+ */
+export class ReferenceTokens {
+  private readonly key: Promise<CryptoKey>;
 
   constructor(
     keyHex: string,
     private readonly now: () => number = Date.now,
   ) {
-    const bytes = decodeHexKey(keyHex);
-    this.keyPromise = crypto.subtle.importKey("raw", bytes.buffer as ArrayBuffer, { name: "AES-GCM" }, false, [
-      "decrypt",
-      "encrypt",
-    ]);
+    this.key = crypto.subtle.importKey("raw", decodeHexKey(keyHex), { name: "AES-GCM" }, false, ["decrypt", "encrypt"]);
   }
 
-  async seal(payload: Omit<ReferenceTokenPayload, "v">): Promise<string> {
-    const key = await this.keyPromise;
+  async seal(scope: TokenScope, userId: number, ttlSeconds: number, body: unknown): Promise<string> {
+    const issuedAt = Math.floor(this.now() / 1000);
+    const envelope: z.infer<typeof envelopeSchema> = {
+      body,
+      exp: issuedAt + ttlSeconds,
+      iat: issuedAt,
+      user_id: userId,
+      v: TOKEN_VERSION,
+    };
     const nonce = crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
-    const plaintext = textEncoder.encode(JSON.stringify({ ...payload, v: TOKEN_VERSION }));
-    const encrypted = new Uint8Array(
+    const ciphertext = new Uint8Array(
       await crypto.subtle.encrypt(
-        {
-          additionalData: routingAdditionalData(payload.purpose, payload.operation),
-          iv: nonce,
-          name: "AES-GCM",
-        },
-        key,
-        plaintext,
+        { additionalData: additionalData(scope), iv: nonce, name: "AES-GCM" },
+        await this.key,
+        textEncoder.encode(JSON.stringify(envelope)),
       ),
     );
-    const combined = new Uint8Array(nonce.length + encrypted.length);
+    const combined = new Uint8Array(nonce.length + ciphertext.length);
     combined.set(nonce);
-    combined.set(encrypted, nonce.length);
+    combined.set(ciphertext, nonce.length);
     return `v${TOKEN_VERSION}.${base64UrlEncode(combined)}`;
   }
 
-  async open(token: string, options: OpenTokenOptions): Promise<ReferenceTokenPayload> {
+  async open<S extends z.ZodType>(
+    token: string,
+    scope: TokenScope,
+    holder: TokenHolder,
+    bodySchema: S,
+  ): Promise<{ body: z.output<S>; userId: number }> {
     const [prefix, encoded, extra] = token.split(".");
-    if (prefix !== `v${TOKEN_VERSION}` || !encoded || extra !== undefined) {
-      throw new ReferenceTokenError("The reference token is invalid");
-    }
+    if (prefix !== `v${TOKEN_VERSION}` || !encoded || extra !== undefined) throw invalidToken();
     const combined = base64UrlDecode(encoded);
-    if (combined.length <= NONCE_BYTES + 16) {
-      throw new ReferenceTokenError("The reference token is invalid");
-    }
-    const key = await this.keyPromise;
+    if (combined.length <= NONCE_BYTES + TAG_BYTES) throw invalidToken();
+
     let plaintext: ArrayBuffer;
     try {
       plaintext = await crypto.subtle.decrypt(
-        {
-          additionalData: routingAdditionalData(options.purpose, options.operation),
-          iv: combined.slice(0, NONCE_BYTES),
-          name: "AES-GCM",
-        },
-        key,
+        { additionalData: additionalData(scope), iv: combined.slice(0, NONCE_BYTES), name: "AES-GCM" },
+        await this.key,
         combined.slice(NONCE_BYTES),
       );
     } catch {
-      throw new ReferenceTokenError("The reference token is invalid or was changed");
+      throw invalidToken("The reference token is invalid or was changed");
     }
 
     let decoded: unknown;
     try {
       decoded = JSON.parse(new TextDecoder().decode(plaintext));
     } catch {
-      throw new ReferenceTokenError("The reference token is invalid");
+      throw invalidToken();
     }
-    if (!isPayload(decoded)) throw new ReferenceTokenError("The reference token is invalid");
-    if (decoded.exp <= Math.floor(this.now() / 1000)) {
-      throw new ReferenceTokenError("The reference token expired. Start a new request");
+    const envelope = envelopeSchema.safeParse(decoded);
+    if (!envelope.success) throw invalidToken();
+    if (envelope.data.exp <= Math.floor(this.now() / 1000)) {
+      throw invalidToken("The reference token expired. Start a new request");
     }
-    if (decoded.purpose !== options.purpose) {
-      throw new ReferenceTokenError("The reference token has the wrong purpose");
+    if (holder !== "any" && envelope.data.user_id !== holder) {
+      throw invalidToken("The reference token belongs to a different GitHub user");
     }
-    if (decoded.operation !== options.operation) {
-      throw new ReferenceTokenError("The reference token is for a different operation");
-    }
-    if (options.user_id !== undefined && decoded.user_id !== options.user_id) {
-      throw new ReferenceTokenError("The reference token belongs to a different GitHub user");
-    }
-    return decoded;
+    const body = bodySchema.safeParse(envelope.data.body);
+    if (!body.success) throw invalidToken();
+    return { body: body.data, userId: envelope.data.user_id };
   }
-}
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, canonicalize(item)]),
-  );
-}
-
-export async function argumentHash(value: unknown): Promise<string> {
-  const data = textEncoder.encode(JSON.stringify(canonicalize(value)));
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-export async function bodyHash(value: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", textEncoder.encode(value)));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

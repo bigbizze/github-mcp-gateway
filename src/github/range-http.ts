@@ -1,4 +1,4 @@
-import { GatewayError } from "./gateway-error";
+import { GatewayError } from "../errors";
 
 const MAX_HEADER_BYTES = 16 * 1024;
 const MAX_RANGE_BYTES = 64 * 1024;
